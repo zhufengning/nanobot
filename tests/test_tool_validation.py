@@ -8,12 +8,13 @@ from nanobot.agent.loop import AgentLoop
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.base import Tool
 from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.bus.events import OutboundMessage
+from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.openai_api import OpenAIAPIChannel
 from nanobot.config.loader import _parse_env_line, load_dotenv
 from nanobot.config.schema import OpenAIAPIConfig
 from nanobot.providers.base import LLMProvider, LLMResponse
+from nanobot.session.manager import Session
 
 
 class SampleTool(Tool):
@@ -160,6 +161,38 @@ def test_openai_api_channel_rejects_unauthorized_http_call() -> None:
     assert payload["error"]["type"] == "authentication_error"
 
 
+def test_openai_api_channel_stream_detection() -> None:
+    assert OpenAIAPIChannel.request_is_stream(
+        b'{"stream": true, "messages":[{"role":"user","content":"hi"}]}'
+    ) is True
+    assert OpenAIAPIChannel.request_is_stream(
+        b'{"stream": false, "messages":[{"role":"user","content":"hi"}]}'
+    ) is False
+    assert OpenAIAPIChannel.request_is_stream(b"{not-json}") is False
+
+
+def test_openai_api_channel_build_stream_chunks() -> None:
+    completion = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "nanobot-agent",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    chunks = OpenAIAPIChannel.build_stream_chunks(completion)
+    assert len(chunks) == 3
+    assert chunks[0]["choices"][0]["delta"]["role"] == "assistant"
+    assert chunks[1]["choices"][0]["delta"]["content"] == "hello"
+    assert chunks[2]["choices"][0]["finish_reason"] == "stop"
+
+
 async def test_openai_api_channel_send_resolves_pending_waiter() -> None:
     channel = OpenAIAPIChannel(OpenAIAPIConfig(enabled=True), MessageBus())
     waiter = asyncio.get_running_loop().create_future()
@@ -253,6 +286,75 @@ def test_subagent_manager_can_disable_files_exec_and_fetch_tools() -> None:
         "web_fetch",
     }
     assert disabled.isdisjoint(set(tools.tool_names))
+
+
+def test_subagent_manager_tracks_origin_task_counts_by_request_id() -> None:
+    manager = SubagentManager(
+        provider=DummyProvider(),
+        workspace=Path.cwd(),
+        bus=MessageBus(),
+    )
+    origin = {
+        "channel": "openai_api",
+        "chat_id": "session-1",
+        "metadata": {"request_id": "req-1"},
+    }
+
+    manager._mark_origin_task_started(origin)
+    manager._mark_origin_task_started(origin)
+    assert manager._mark_origin_task_done(origin) is False
+    assert manager._mark_origin_task_done(origin) is True
+
+
+async def test_process_system_message_suppresses_intermediate_subagent_updates() -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=DummyProvider(),
+        workspace=Path.cwd() / "workspace",
+    )
+    msg = InboundMessage(
+        channel="system",
+        sender_id="subagent",
+        chat_id="openai_api:chat-1",
+        content="subagent update",
+        metadata={
+            "request_id": "req-1",
+            "wait_for_subagents": True,
+            "subagent_done": True,
+            "subagent_all_done": False,
+        },
+    )
+    loop.sessions._cache["openai_api:chat-1"] = Session(key="openai_api:chat-1")
+    loop.sessions.save = lambda _session: None  # type: ignore[method-assign]
+
+    result = await loop._process_system_message(msg)
+    assert result is None
+
+
+async def test_process_system_message_returns_when_all_subagents_done() -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=DummyProvider(),
+        workspace=Path.cwd() / "workspace",
+    )
+    msg = InboundMessage(
+        channel="system",
+        sender_id="subagent",
+        chat_id="openai_api:chat-1",
+        content="subagent final update",
+        metadata={
+            "request_id": "req-1",
+            "wait_for_subagents": True,
+            "subagent_done": True,
+            "subagent_all_done": True,
+        },
+    )
+    loop.sessions._cache["openai_api:chat-1"] = Session(key="openai_api:chat-1")
+    loop.sessions.save = lambda _session: None  # type: ignore[method-assign]
+
+    result = await loop._process_system_message(msg)
+    assert result is not None
+    assert result.metadata.get("request_id") == "req-1"
 
 
 def test_parse_env_line_supports_export_and_quotes() -> None:

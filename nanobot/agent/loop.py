@@ -190,6 +190,7 @@ class AgentLoop:
         # OpenAI-compatible API requests typically send full conversation
         # history in each call. For these stateless requests, skip stored session history.
         stateless = bool((msg.metadata or {}).get("stateless"))
+        wait_for_subagents = bool((msg.metadata or {}).get("wait_for_subagents"))
         if stateless:
             key = session_key or f"{msg.channel}:stateless:{(msg.metadata or {}).get('request_id', msg.timestamp.isoformat())}"
             session = Session(key=key)
@@ -226,7 +227,7 @@ class AgentLoop:
         
         spawn_tool = self.tools.get("spawn")
         if isinstance(spawn_tool, SpawnTool):
-            spawn_tool.set_context(msg.channel, msg.chat_id)
+            spawn_tool.set_context(msg.channel, msg.chat_id, msg.metadata or {})
         
         cron_tool = self.tools.get("cron")
         if isinstance(cron_tool, CronTool):
@@ -307,6 +308,11 @@ class AgentLoop:
             session.add_message("assistant", final_content,
                                 tools_used=tools_used if tools_used else None)
             self.sessions.save(session)
+
+        # OpenAI API mode: if this turn spawned subagents, wait for their
+        # follow-up system messages and return only after all are done.
+        if wait_for_subagents and "spawn" in tools_used:
+            return None
         
         return OutboundMessage(
             channel=msg.channel,
@@ -345,7 +351,7 @@ class AgentLoop:
         
         spawn_tool = self.tools.get("spawn")
         if isinstance(spawn_tool, SpawnTool):
-            spawn_tool.set_context(origin_channel, origin_chat_id)
+            spawn_tool.set_context(origin_channel, origin_chat_id, msg.metadata or {})
         
         cron_tool = self.tools.get("cron")
         if isinstance(cron_tool, CronTool):
@@ -410,10 +416,16 @@ class AgentLoop:
         session.add_message("assistant", final_content)
         self.sessions.save(session)
         
+        # In wait-for-subagents mode, suppress intermediate subagent updates.
+        if bool((msg.metadata or {}).get("wait_for_subagents")) and bool((msg.metadata or {}).get("subagent_done")):
+            if not bool((msg.metadata or {}).get("subagent_all_done")):
+                return None
+
         return OutboundMessage(
             channel=origin_channel,
             chat_id=origin_chat_id,
-            content=final_content
+            content=final_content,
+            metadata=msg.metadata or {},
         )
     
     async def _consolidate_memory(self, session, archive_all: bool = False) -> None:

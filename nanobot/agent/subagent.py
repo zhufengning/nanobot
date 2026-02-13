@@ -53,6 +53,7 @@ class SubagentManager:
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
+        self._origin_active_counts: dict[str, int] = {}
     
     async def spawn(
         self,
@@ -60,6 +61,7 @@ class SubagentManager:
         label: str | None = None,
         origin_channel: str = "cli",
         origin_chat_id: str = "direct",
+        origin_metadata: dict[str, Any] | None = None,
     ) -> str:
         """
         Spawn a subagent to execute a task in the background.
@@ -79,7 +81,9 @@ class SubagentManager:
         origin = {
             "channel": origin_channel,
             "chat_id": origin_chat_id,
+            "metadata": origin_metadata or {},
         }
+        self._mark_origin_task_started(origin)
         
         # Create background task
         bg_task = asyncio.create_task(
@@ -98,11 +102,13 @@ class SubagentManager:
         task_id: str,
         task: str,
         label: str,
-        origin: dict[str, str],
+        origin: dict[str, Any],
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info(f"Subagent [{task_id}] starting task: {label}")
         
+        status = "ok"
+        final_result = ""
         try:
             # Build subagent tools (no message tool, no spawn tool)
             tools = self._build_tools()
@@ -117,7 +123,7 @@ class SubagentManager:
             # Run agent loop (limited iterations)
             max_iterations = 15
             iteration = 0
-            final_result: str | None = None
+            final_result_internal: str | None = None
             
             while iteration < max_iterations:
                 iteration += 1
@@ -159,19 +165,30 @@ class SubagentManager:
                             "content": result,
                         })
                 else:
-                    final_result = response.content
+                    final_result_internal = response.content
                     break
             
-            if final_result is None:
-                final_result = "Task completed but no final response was generated."
-            
+            if final_result_internal is None:
+                final_result_internal = "Task completed but no final response was generated."
+            final_result = final_result_internal
             logger.info(f"Subagent [{task_id}] completed successfully")
-            await self._announce_result(task_id, label, task, final_result, origin, "ok")
             
         except Exception as e:
+            status = "error"
             error_msg = f"Error: {str(e)}"
+            final_result = error_msg
             logger.error(f"Subagent [{task_id}] failed: {e}")
-            await self._announce_result(task_id, label, task, error_msg, origin, "error")
+        finally:
+            all_done = self._mark_origin_task_done(origin)
+            await self._announce_result(
+                task_id=task_id,
+                label=label,
+                task=task,
+                result=final_result,
+                origin=origin,
+                status=status,
+                all_done=all_done,
+            )
     
     async def _announce_result(
         self,
@@ -179,8 +196,9 @@ class SubagentManager:
         label: str,
         task: str,
         result: str,
-        origin: dict[str, str],
+        origin: dict[str, Any],
         status: str,
+        all_done: bool,
     ) -> None:
         """Announce the subagent result to the main agent via the message bus."""
         status_text = "completed successfully" if status == "ok" else "failed"
@@ -195,15 +213,53 @@ Result:
 Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not mention technical details like "subagent" or task IDs."""
         
         # Inject as system message to trigger main agent
+        metadata = dict(origin.get("metadata") or {})
+        metadata.update({
+            "subagent_done": True,
+            "subagent_all_done": all_done,
+        })
         msg = InboundMessage(
             channel="system",
             sender_id="subagent",
             chat_id=f"{origin['channel']}:{origin['chat_id']}",
             content=announce_content,
+            metadata=metadata,
         )
         
         await self.bus.publish_inbound(msg)
         logger.debug(f"Subagent [{task_id}] announced result to {origin['channel']}:{origin['chat_id']}")
+
+    def _origin_task_key(self, origin: dict[str, Any]) -> str:
+        """Build a key for grouping subagents from the same origin request."""
+        channel = str(origin.get("channel", ""))
+        chat_id = str(origin.get("chat_id", ""))
+        metadata = origin.get("metadata") or {}
+        request_id = ""
+        if isinstance(metadata, dict):
+            request_id = str(metadata.get("request_id", "")).strip()
+        if request_id:
+            return f"{channel}:{chat_id}:{request_id}"
+        return f"{channel}:{chat_id}"
+
+    def _mark_origin_task_started(self, origin: dict[str, Any]) -> None:
+        """Increase active subagent count for the origin request."""
+        key = self._origin_task_key(origin)
+        self._origin_active_counts[key] = self._origin_active_counts.get(key, 0) + 1
+
+    def _mark_origin_task_done(self, origin: dict[str, Any]) -> bool:
+        """
+        Decrease active subagent count for the origin request.
+
+        Returns:
+            True if no active tasks remain for the origin request.
+        """
+        key = self._origin_task_key(origin)
+        current = self._origin_active_counts.get(key, 0)
+        if current <= 1:
+            self._origin_active_counts.pop(key, None)
+            return True
+        self._origin_active_counts[key] = current - 1
+        return False
 
     def _build_tools(self) -> ToolRegistry:
         """Build subagent tool registry based on current config."""

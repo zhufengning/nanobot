@@ -60,21 +60,42 @@ class _OpenAIRequestHandler(BaseHTTPRequestHandler):
             self._send_json(404, self.server.channel.error_payload("Not found", "invalid_request_error"))
             return
 
+        is_stream = self.server.channel.request_is_stream(self._peek_body())
         status, payload = self.server.channel.handle_chat_completion_http(
             body=self._read_body(),
             client_ip=self.client_address[0] if self.client_address else "unknown",
             authorization=self.headers.get("Authorization"),
         )
+        if status != 200:
+            self._send_json(status, payload)
+            return
+
+        if is_stream:
+            self._send_sse_from_completion(payload)
+            return
+
         self._send_json(status, payload)
 
+    def _peek_body(self) -> bytes:
+        """Read request body once and cache it for later handlers."""
+        if hasattr(self, "_cached_body"):
+            return self._cached_body  # type: ignore[attr-defined]
+        body = self._read_body()
+        setattr(self, "_cached_body", body)
+        return body
+
     def _read_body(self) -> bytes:
+        if hasattr(self, "_cached_body"):
+            return self._cached_body  # type: ignore[attr-defined]
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             return b""
         if content_length <= 0:
             return b""
-        return self.rfile.read(content_length)
+        body = self.rfile.read(content_length)
+        setattr(self, "_cached_body", body)
+        return body
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -84,6 +105,24 @@ class _OpenAIRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def _send_sse_from_completion(self, completion: dict[str, Any]) -> None:
+        """Send OpenAI-compatible SSE chunks from a completion payload."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        # End stream by closing the HTTP connection after [DONE].
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        for chunk in self.server.channel.build_stream_chunks(completion):
+            data = json.dumps(chunk, ensure_ascii=False)
+            self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+        self.close_connection = True
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug(f"OpenAI API channel HTTP: {fmt % args}")
@@ -95,7 +134,7 @@ class OpenAIAPIChannel(BaseChannel):
 
     Request format:
     - OpenAI Chat Completions compatible JSON payload.
-    - `stream=true` is currently not supported.
+    - `stream=true` is supported via SSE.
     """
 
     name = "openai_api"
@@ -220,6 +259,17 @@ class OpenAIAPIChannel(BaseChannel):
             logger.exception(f"OpenAI API request failed: {e}")
             return 500, self.error_payload("Internal server error", "server_error")
 
+    @staticmethod
+    def request_is_stream(body: bytes) -> bool:
+        """Best-effort check whether request asks for stream mode."""
+        if not body:
+            return False
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return isinstance(payload, dict) and payload.get("stream") is True
+
     async def _handle_chat_completion(
         self,
         payload: dict[str, Any],
@@ -228,9 +278,6 @@ class OpenAIAPIChannel(BaseChannel):
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages:
             raise ValueError("Field 'messages' must be a non-empty array.")
-
-        if payload.get("stream") is True:
-            raise ValueError("Field 'stream=true' is not supported yet.")
 
         model = payload.get("model")
         if not isinstance(model, str) or not model.strip():
@@ -261,6 +308,8 @@ class OpenAIAPIChannel(BaseChannel):
                     # OpenAI clients usually send full conversation history in each request.
                     # Mark request as stateless so agent-side session history is not reused.
                     "stateless": True,
+                    # Return only after all spawned subagents complete.
+                    "wait_for_subagents": True,
                 },
             )
             answer = await asyncio.wait_for(
@@ -380,3 +429,53 @@ class OpenAIAPIChannel(BaseChannel):
                 "total_tokens": 0,
             },
         }
+
+    @staticmethod
+    def build_stream_chunks(completion: dict[str, Any]) -> list[dict[str, Any]]:
+        """Convert a completion payload into OpenAI-compatible stream chunks."""
+        completion_id = str(completion.get("id") or f"chatcmpl-{uuid.uuid4().hex}")
+        created = int(completion.get("created") or int(time.time()))
+        model = str(completion.get("model") or "")
+
+        content = ""
+        finish_reason = "stop"
+        choices = completion.get("choices")
+        if isinstance(choices, list) and choices:
+            first_choice = choices[0] if isinstance(choices[0], dict) else {}
+            if isinstance(first_choice, dict):
+                finish_reason = str(first_choice.get("finish_reason") or "stop")
+                message = first_choice.get("message")
+                if isinstance(message, dict):
+                    content = str(message.get("content") or "")
+
+        chunks: list[dict[str, Any]] = [
+            {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            }
+        ]
+
+        if content:
+            chunks.append(
+                {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
+                }
+            )
+
+        chunks.append(
+            {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+            }
+        )
+        return chunks

@@ -279,9 +279,10 @@ curl -X POST "http://127.0.0.1:18888/v1/chat/completions" \
 ```
 
 > Notes:
-> - `stream=true` is not supported yet.
+> - `stream=true` is supported via SSE (`text/event-stream`).
 > - `GET /v1/models` and `GET /health` are available.
 > - Requests are treated as stateless by default: server-side session history is not reused for this channel.
+> - If the agent spawns subagents, API response waits until all spawned subagents complete.
 
 </details>
 
