@@ -33,6 +33,10 @@ class SubagentManager:
         bus: MessageBus,
         model: str | None = None,
         brave_api_key: str | None = None,
+        web_search_enabled: bool = True,
+        web_fetch_enabled: bool = True,
+        filesystem_enabled: bool = True,
+        exec_enabled: bool = True,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
     ):
@@ -42,6 +46,10 @@ class SubagentManager:
         self.bus = bus
         self.model = model or provider.get_default_model()
         self.brave_api_key = brave_api_key
+        self.web_search_enabled = web_search_enabled
+        self.web_fetch_enabled = web_fetch_enabled
+        self.filesystem_enabled = filesystem_enabled
+        self.exec_enabled = exec_enabled
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
@@ -97,19 +105,7 @@ class SubagentManager:
         
         try:
             # Build subagent tools (no message tool, no spawn tool)
-            tools = ToolRegistry()
-            allowed_dir = self.workspace if self.restrict_to_workspace else None
-            tools.register(ReadFileTool(allowed_dir=allowed_dir))
-            tools.register(WriteFileTool(allowed_dir=allowed_dir))
-            tools.register(EditFileTool(allowed_dir=allowed_dir))
-            tools.register(ListDirTool(allowed_dir=allowed_dir))
-            tools.register(ExecTool(
-                working_dir=str(self.workspace),
-                timeout=self.exec_config.timeout,
-                restrict_to_workspace=self.restrict_to_workspace,
-            ))
-            tools.register(WebSearchTool(api_key=self.brave_api_key))
-            tools.register(WebFetchTool())
+            tools = self._build_tools()
             
             # Build messages with subagent-specific prompt
             system_prompt = self._build_subagent_prompt(task)
@@ -208,6 +204,27 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         
         await self.bus.publish_inbound(msg)
         logger.debug(f"Subagent [{task_id}] announced result to {origin['channel']}:{origin['chat_id']}")
+
+    def _build_tools(self) -> ToolRegistry:
+        """Build subagent tool registry based on current config."""
+        tools = ToolRegistry()
+        allowed_dir = self.workspace if self.restrict_to_workspace else None
+        if self.filesystem_enabled:
+            tools.register(ReadFileTool(allowed_dir=allowed_dir))
+            tools.register(WriteFileTool(allowed_dir=allowed_dir))
+            tools.register(EditFileTool(allowed_dir=allowed_dir))
+            tools.register(ListDirTool(allowed_dir=allowed_dir))
+        if self.exec_enabled:
+            tools.register(ExecTool(
+                working_dir=str(self.workspace),
+                timeout=self.exec_config.timeout,
+                restrict_to_workspace=self.restrict_to_workspace,
+            ))
+        if self.web_search_enabled:
+            tools.register(WebSearchTool(api_key=self.brave_api_key))
+        if self.web_fetch_enabled:
+            tools.register(WebFetchTool())
+        return tools
     
     def _build_subagent_prompt(self, task: str) -> str:
         """Build a focused system prompt for the subagent."""

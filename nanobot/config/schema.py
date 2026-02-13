@@ -213,17 +213,25 @@ class GatewayConfig(BaseModel):
 
 class WebSearchConfig(BaseModel):
     """Web search tool configuration."""
+    enabled: bool = True
     api_key: str = ""  # Brave Search API key
     max_results: int = 5
+
+
+class WebFetchConfig(BaseModel):
+    """Web fetch tool configuration."""
+    enabled: bool = True
 
 
 class WebToolsConfig(BaseModel):
     """Web tools configuration."""
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
 
 
 class ExecToolConfig(BaseModel):
     """Shell exec tool configuration."""
+    enabled: bool = True
     timeout: int = 60
 
 
@@ -231,6 +239,10 @@ class ToolsConfig(BaseModel):
     """Tools configuration."""
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
+    filesystem_enabled: bool = True
+    message_enabled: bool = True
+    spawn_enabled: bool = True
+    cron_enabled: bool = True
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
 
 

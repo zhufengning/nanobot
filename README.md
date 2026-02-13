@@ -131,6 +131,22 @@ nanobot agent -m "What is 2+2?"
 
 That's it! You have a working AI assistant in 2 minutes.
 
+### Optional: `.env` support
+
+nanobot automatically loads environment variables from `~/.nanobot/.env` on startup.
+
+Example:
+
+```bash
+mkdir -p ~/.nanobot
+cat > ~/.nanobot/.env << 'EOF'
+OPENAI_API_KEY=sk-xxx
+MY_SKILL_TOKEN=abc123
+EOF
+```
+
+> Existing system environment variables take precedence over `.env` values.
+
 ## 🖥️ Local Models (vLLM)
 
 Run nanobot with your own local models using vLLM or any OpenAI-compatible server.
@@ -715,6 +731,13 @@ That's it! Environment variables, model prefixing, config matching, and `nanobot
 | Option | Default | Description |
 |--------|---------|-------------|
 | `tools.restrictToWorkspace` | `false` | When `true`, restricts **all** agent tools (shell, file read/write/edit, list) to the workspace directory. Prevents path traversal and out-of-scope access. |
+| `tools.filesystemEnabled` | `true` | Enable/disable all file tools: `read_file`, `write_file`, `edit_file`, `list_dir`. |
+| `tools.exec.enabled` | `true` | Enable/disable the `exec` shell tool. |
+| `tools.web.search.enabled` | `true` | Enable/disable the built-in `web_search` tool (Brave Search). Set to `false` to fully disable web search tool calls. |
+| `tools.web.fetch.enabled` | `true` | Enable/disable the `web_fetch` tool. |
+| `tools.messageEnabled` | `true` | Enable/disable the `message` tool (channel push). |
+| `tools.spawnEnabled` | `true` | Enable/disable the `spawn` tool (background subagents). |
+| `tools.cronEnabled` | `true` | Enable/disable the `cron` scheduling tool registration. |
 | `channels.*.allowFrom` | `[]` (allow all) | Whitelist of user IDs. Empty = allow everyone; non-empty = only listed users can interact. |
 
 

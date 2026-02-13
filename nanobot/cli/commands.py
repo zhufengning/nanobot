@@ -144,7 +144,8 @@ def main(
     ),
 ):
     """nanobot - Personal AI Assistant."""
-    pass
+    from nanobot.config.loader import load_dotenv
+    load_dotenv()
 
 
 # ============================================================================
@@ -331,6 +332,13 @@ def gateway(
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
         brave_api_key=config.tools.web.search.api_key or None,
+        web_search_enabled=config.tools.web.search.enabled,
+        web_fetch_enabled=config.tools.web.fetch.enabled,
+        filesystem_enabled=config.tools.filesystem_enabled,
+        exec_enabled=config.tools.exec.enabled,
+        message_enabled=config.tools.message_enabled,
+        spawn_enabled=config.tools.spawn_enabled,
+        cron_enabled=config.tools.cron_enabled,
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
@@ -438,6 +446,12 @@ def agent(
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
         brave_api_key=config.tools.web.search.api_key or None,
+        web_search_enabled=config.tools.web.search.enabled,
+        web_fetch_enabled=config.tools.web.fetch.enabled,
+        filesystem_enabled=config.tools.filesystem_enabled,
+        exec_enabled=config.tools.exec.enabled,
+        message_enabled=config.tools.message_enabled,
+        spawn_enabled=config.tools.spawn_enabled,
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
     )

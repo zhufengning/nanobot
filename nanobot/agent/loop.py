@@ -44,6 +44,13 @@ class AgentLoop:
         max_iterations: int = 20,
         memory_window: int = 50,
         brave_api_key: str | None = None,
+        web_search_enabled: bool = True,
+        web_fetch_enabled: bool = True,
+        filesystem_enabled: bool = True,
+        exec_enabled: bool = True,
+        message_enabled: bool = True,
+        spawn_enabled: bool = True,
+        cron_enabled: bool = True,
         exec_config: "ExecToolConfig | None" = None,
         cron_service: "CronService | None" = None,
         restrict_to_workspace: bool = False,
@@ -58,6 +65,13 @@ class AgentLoop:
         self.max_iterations = max_iterations
         self.memory_window = memory_window
         self.brave_api_key = brave_api_key
+        self.web_search_enabled = web_search_enabled
+        self.web_fetch_enabled = web_fetch_enabled
+        self.filesystem_enabled = filesystem_enabled
+        self.exec_enabled = exec_enabled
+        self.message_enabled = message_enabled
+        self.spawn_enabled = spawn_enabled
+        self.cron_enabled = cron_enabled
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
@@ -71,6 +85,10 @@ class AgentLoop:
             bus=bus,
             model=self.model,
             brave_api_key=brave_api_key,
+            web_search_enabled=web_search_enabled,
+            web_fetch_enabled=web_fetch_enabled,
+            filesystem_enabled=filesystem_enabled,
+            exec_enabled=exec_enabled,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
         )
@@ -82,32 +100,38 @@ class AgentLoop:
         """Register the default set of tools."""
         # File tools (restrict to workspace if configured)
         allowed_dir = self.workspace if self.restrict_to_workspace else None
-        self.tools.register(ReadFileTool(allowed_dir=allowed_dir))
-        self.tools.register(WriteFileTool(allowed_dir=allowed_dir))
-        self.tools.register(EditFileTool(allowed_dir=allowed_dir))
-        self.tools.register(ListDirTool(allowed_dir=allowed_dir))
+        if self.filesystem_enabled:
+            self.tools.register(ReadFileTool(allowed_dir=allowed_dir))
+            self.tools.register(WriteFileTool(allowed_dir=allowed_dir))
+            self.tools.register(EditFileTool(allowed_dir=allowed_dir))
+            self.tools.register(ListDirTool(allowed_dir=allowed_dir))
         
         # Shell tool
-        self.tools.register(ExecTool(
-            working_dir=str(self.workspace),
-            timeout=self.exec_config.timeout,
-            restrict_to_workspace=self.restrict_to_workspace,
-        ))
+        if self.exec_enabled:
+            self.tools.register(ExecTool(
+                working_dir=str(self.workspace),
+                timeout=self.exec_config.timeout,
+                restrict_to_workspace=self.restrict_to_workspace,
+            ))
         
         # Web tools
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key))
-        self.tools.register(WebFetchTool())
+        if self.web_search_enabled:
+            self.tools.register(WebSearchTool(api_key=self.brave_api_key))
+        if self.web_fetch_enabled:
+            self.tools.register(WebFetchTool())
         
         # Message tool
-        message_tool = MessageTool(send_callback=self.bus.publish_outbound)
-        self.tools.register(message_tool)
+        if self.message_enabled:
+            message_tool = MessageTool(send_callback=self.bus.publish_outbound)
+            self.tools.register(message_tool)
         
         # Spawn tool (for subagents)
-        spawn_tool = SpawnTool(manager=self.subagents)
-        self.tools.register(spawn_tool)
+        if self.spawn_enabled:
+            spawn_tool = SpawnTool(manager=self.subagents)
+            self.tools.register(spawn_tool)
         
         # Cron tool (for scheduling)
-        if self.cron_service:
+        if self.cron_service and self.cron_enabled:
             self.tools.register(CronTool(self.cron_service))
     
     async def run(self) -> None:

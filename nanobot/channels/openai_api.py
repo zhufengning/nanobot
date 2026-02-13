@@ -332,7 +332,7 @@ class OpenAIAPIChannel(BaseChannel):
         if len(rendered) == 1 and rendered[0][0] == "user":
             return rendered[0][1]
 
-        history = ["以下是 OpenAI Chat Completions 请求中的对话历史。请基于上下文继续回复。"]
+        history = []
         for role, text in rendered:
             history.append(f"[{role}] {text}")
         return "\n\n".join(history)
