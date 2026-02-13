@@ -136,6 +136,18 @@ class ChannelManager:
                 logger.info("QQ channel enabled")
             except ImportError as e:
                 logger.warning(f"QQ channel not available: {e}")
+
+        # OpenAI-compatible API channel
+        if self.config.channels.openai_api.enabled:
+            try:
+                from nanobot.channels.openai_api import OpenAIAPIChannel
+                self.channels["openai_api"] = OpenAIAPIChannel(
+                    self.config.channels.openai_api,
+                    self.bus,
+                )
+                logger.info("OpenAI API channel enabled")
+            except ImportError as e:
+                logger.warning(f"OpenAI API channel not available: {e}")
     
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
         """Start a channel and log any exceptions."""

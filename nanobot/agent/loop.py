@@ -20,7 +20,7 @@ from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.subagent import SubagentManager
-from nanobot.session.manager import SessionManager
+from nanobot.session.manager import Session, SessionManager
 
 
 class AgentLoop:
@@ -163,13 +163,25 @@ class AgentLoop:
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info(f"Processing message from {msg.channel}:{msg.sender_id}: {preview}")
         
-        # Get or create session
-        key = session_key or msg.session_key
-        session = self.sessions.get_or_create(key)
+        # OpenAI-compatible API requests typically send full conversation
+        # history in each call. For these stateless requests, skip stored session history.
+        stateless = bool((msg.metadata or {}).get("stateless"))
+        if stateless:
+            key = session_key or f"{msg.channel}:stateless:{(msg.metadata or {}).get('request_id', msg.timestamp.isoformat())}"
+            session = Session(key=key)
+        else:
+            key = session_key or msg.session_key
+            session = self.sessions.get_or_create(key)
         
         # Handle slash commands
         cmd = msg.content.strip().lower()
         if cmd == "/new":
+            if stateless:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="🐈 Stateless mode has no persisted session to reset.",
+                )
             await self._consolidate_memory(session, archive_all=True)
             session.clear()
             self.sessions.save(session)
@@ -180,7 +192,7 @@ class AgentLoop:
                                   content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands")
         
         # Consolidate memory before processing if session is too large
-        if len(session.messages) > self.memory_window:
+        if not stateless and len(session.messages) > self.memory_window:
             await self._consolidate_memory(session)
         
         # Update tool contexts
@@ -266,10 +278,11 @@ class AgentLoop:
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
         
         # Save to session (include tool names so consolidation sees what happened)
-        session.add_message("user", msg.content)
-        session.add_message("assistant", final_content,
-                            tools_used=tools_used if tools_used else None)
-        self.sessions.save(session)
+        if not stateless:
+            session.add_message("user", msg.content)
+            session.add_message("assistant", final_content,
+                                tools_used=tools_used if tools_used else None)
+            self.sessions.save(session)
         
         return OutboundMessage(
             channel=msg.channel,

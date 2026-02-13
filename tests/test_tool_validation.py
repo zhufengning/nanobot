@@ -1,7 +1,12 @@
+import asyncio
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
 from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.bus.events import OutboundMessage
+from nanobot.bus.queue import MessageBus
+from nanobot.channels.openai_api import OpenAIAPIChannel
+from nanobot.config.schema import OpenAIAPIConfig
 
 
 class SampleTool(Tool):
@@ -86,3 +91,66 @@ async def test_registry_returns_validation_error() -> None:
     reg.register(SampleTool())
     result = await reg.execute("sample", {"query": "hi"})
     assert "Invalid parameters" in result
+
+
+def test_openai_api_channel_authorization() -> None:
+    channel = OpenAIAPIChannel(
+        OpenAIAPIConfig(enabled=True, api_key="secret-token"),
+        MessageBus(),
+    )
+
+    assert channel.is_request_authorized("Bearer secret-token") is True
+    assert channel.is_request_authorized("Bearer wrong-token") is False
+    assert channel.is_request_authorized(None) is False
+
+
+def test_openai_api_channel_messages_to_prompt() -> None:
+    single = OpenAIAPIChannel._messages_to_prompt(
+        [{"role": "user", "content": "你好，介绍一下你自己"}]
+    )
+    assert single == "你好，介绍一下你自己"
+
+    multi = OpenAIAPIChannel._messages_to_prompt(
+        [
+            {"role": "system", "content": "你是助手"},
+            {"role": "assistant", "content": "你好"},
+            {"role": "user", "content": [{"type": "text", "text": "再说一次"}]},
+        ]
+    )
+    assert "OpenAI Chat Completions" in multi
+    assert "[system] 你是助手" in multi
+    assert "[assistant] 你好" in multi
+    assert "[user] 再说一次" in multi
+
+
+def test_openai_api_channel_rejects_unauthorized_http_call() -> None:
+    channel = OpenAIAPIChannel(
+        OpenAIAPIConfig(enabled=True, api_key="secret-token"),
+        MessageBus(),
+    )
+
+    status, payload = channel.handle_chat_completion_http(
+        body=b'{"messages":[{"role":"user","content":"hi"}]}',
+        client_ip="127.0.0.1",
+        authorization=None,
+    )
+
+    assert status == 401
+    assert payload["error"]["type"] == "authentication_error"
+
+
+async def test_openai_api_channel_send_resolves_pending_waiter() -> None:
+    channel = OpenAIAPIChannel(OpenAIAPIConfig(enabled=True), MessageBus())
+    waiter = asyncio.get_running_loop().create_future()
+    channel._pending["req-1"] = waiter
+
+    await channel.send(
+        OutboundMessage(
+            channel="openai_api",
+            chat_id="alice",
+            content="收到",
+            metadata={"request_id": "req-1"},
+        )
+    )
+
+    assert await waiter == "收到"

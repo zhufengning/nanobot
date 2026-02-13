@@ -142,6 +142,17 @@ class QQConfig(BaseModel):
     allow_from: list[str] = Field(default_factory=list)  # Allowed user openids (empty = public access)
 
 
+class OpenAIAPIConfig(BaseModel):
+    """OpenAI-compatible HTTP API channel configuration."""
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 18888
+    api_key: str = ""  # Optional Bearer token for authentication
+    default_model: str = "nanobot-agent"
+    request_timeout_seconds: int = 120
+    allow_from: list[str] = Field(default_factory=list)  # Allowed sender IDs (mapped from request user/ip)
+
+
 class ChannelsConfig(BaseModel):
     """Configuration for chat channels."""
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
@@ -153,6 +164,7 @@ class ChannelsConfig(BaseModel):
     email: EmailConfig = Field(default_factory=EmailConfig)
     slack: SlackConfig = Field(default_factory=SlackConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
+    openai_api: OpenAIAPIConfig = Field(default_factory=OpenAIAPIConfig)
 
 
 class AgentDefaults(BaseModel):

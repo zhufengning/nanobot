@@ -170,7 +170,7 @@ nanobot agent -m "Hello from my local LLM!"
 
 ## 💬 Chat Apps
 
-Talk to your nanobot through Telegram, Discord, WhatsApp, Feishu, Mochat, DingTalk, Slack, Email, or QQ — anytime, anywhere.
+Talk to your nanobot through Telegram, Discord, WhatsApp, Feishu, Mochat, DingTalk, Slack, Email, QQ, or an OpenAI-compatible HTTP API — anytime, anywhere.
 
 | Channel | Setup |
 |---------|-------|
@@ -183,6 +183,7 @@ Talk to your nanobot through Telegram, Discord, WhatsApp, Feishu, Mochat, DingTa
 | **Slack** | Medium (bot + app tokens) |
 | **Email** | Medium (IMAP/SMTP credentials) |
 | **QQ** | Easy (app credentials) |
+| **OpenAI API** | Easy (HTTP endpoint + optional Bearer token) |
 
 <details>
 <summary><b>Telegram</b> (Recommended)</summary>
@@ -215,6 +216,56 @@ Talk to your nanobot through Telegram, Discord, WhatsApp, Feishu, Mochat, DingTa
 ```bash
 nanobot gateway
 ```
+
+</details>
+
+<details>
+<summary><b>OpenAI-compatible API</b></summary>
+
+Expose nanobot as a local HTTP endpoint compatible with `POST /v1/chat/completions`.
+
+**1. Configure**
+
+```json
+{
+  "channels": {
+    "openaiApi": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 18888,
+      "apiKey": "nb-local-token",
+      "defaultModel": "nanobot-agent",
+      "requestTimeoutSeconds": 120
+    }
+  }
+}
+```
+
+**2. Run**
+
+```bash
+nanobot gateway
+```
+
+**3. Call (OpenAI format)**
+
+```bash
+curl -X POST "http://127.0.0.1:18888/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer nb-local-token" \
+  -d '{
+    "model": "nanobot-agent",
+    "user": "alice",
+    "messages": [
+      {"role": "user", "content": "用一句话介绍你自己"}
+    ]
+  }'
+```
+
+> Notes:
+> - `stream=true` is not supported yet.
+> - `GET /v1/models` and `GET /health` are available.
+> - Requests are treated as stateless by default: server-side session history is not reused for this channel.
 
 </details>
 
